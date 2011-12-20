@@ -179,7 +179,6 @@ public class EclipseJavaCompiler
         // ----------------------------------------------------------------------
 
         settings.put( CompilerOptions.OPTION_LineNumberAttribute, CompilerOptions.GENERATE );
-
         settings.put( CompilerOptions.OPTION_SourceFileAttribute, CompilerOptions.GENERATE );
         
         // compiler-specific extra options override anything else in the config object...
@@ -345,7 +344,26 @@ public class EclipseJavaCompiler
 
         public char[] getFileName()
         {
-            return className.toCharArray();
+            //Aaron LaBella, fix on 12/17/2011
+            //
+            //according the Java .class spec, the file name
+            //should be the actual Foo.java name, not the className
+            //
+            //this bug was causing issues when maven dependencies
+            //were not available in the workspace and you tried
+            //to step into and/or debug the class files.  the result
+            //was a "source not found" error from Eclipse, even if
+            //the source lookup location/path was clearly present.
+            String fileName = sourceFile;
+
+            int lastSeparator = fileName.lastIndexOf(File.separatorChar);
+          
+            if (lastSeparator > 0)
+            {
+              fileName = fileName.substring(lastSeparator+1);
+            }
+
+            return fileName.toCharArray();
         }
 
         public char[] getContents()
