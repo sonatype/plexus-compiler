@@ -53,7 +53,6 @@ import org.eclipse.jdt.core.compiler.IProblem;
 import org.eclipse.jdt.internal.compiler.ClassFile;
 import org.eclipse.jdt.internal.compiler.CompilationResult;
 import org.eclipse.jdt.internal.compiler.Compiler;
-import org.eclipse.jdt.internal.compiler.DefaultErrorHandlingPolicies;
 import org.eclipse.jdt.internal.compiler.ICompilerRequestor;
 import org.eclipse.jdt.internal.compiler.IErrorHandlingPolicy;
 import org.eclipse.jdt.internal.compiler.IProblemFactory;
@@ -98,11 +97,11 @@ public class EclipseJavaCompiler
 
         try
         {
-            urls[ i++ ] = new File( config.getOutputLocation() ).toURL();
+            urls[ i++ ] = new File( config.getOutputLocation() ).toURI().toURL();
 
             for ( String entry : classpathEntries )
             {
-                urls[ i++ ] = new File( entry ).toURL();
+                urls[ i++ ] = new File( entry ).toURI().toURL();
             }
         }
         catch ( MalformedURLException e )
@@ -118,13 +117,11 @@ public class EclipseJavaCompiler
                                                                     classLoader,
                                                                     errors );
 
-        IErrorHandlingPolicy policy = DefaultErrorHandlingPolicies.proceedWithAllProblems();
-
         // ----------------------------------------------------------------------
         // Build settings from configuration
         // ----------------------------------------------------------------------
 
-        Map<String, String> settings = new HashMap<String, String>();
+        final Map<String, String> settings = new HashMap<String, String>();
 
         if ( config.isDebug() )
         {
@@ -179,18 +176,28 @@ public class EclipseJavaCompiler
 
         settings.put( CompilerOptions.OPTION_LineNumberAttribute, CompilerOptions.GENERATE );
         settings.put( CompilerOptions.OPTION_SourceFileAttribute, CompilerOptions.GENERATE );
-        
+
         // compiler-specific extra options override anything else in the config object...
-        Map<String, String> extras = config.getCustomCompilerArguments();
+        Map<String, String> extras = config.getCustomCompilerArgumentsAsMap();
         if ( extras != null && !extras.isEmpty() )
         {
             settings.putAll( extras );
         }
 
+        IErrorHandlingPolicy policy = new IErrorHandlingPolicy() {
+            public boolean stopOnFirstError() {
+                return false;
+            }
+
+            public boolean proceedOnErrors(){
+                return settings.containsKey("proceedOnErrors");
+            }
+        };
+
         IProblemFactory problemFactory = new DefaultProblemFactory( Locale.getDefault() );
 
         ICompilerRequestor requestor = new EclipseCompilerICompilerRequestor( config.getOutputLocation(),
-                                                                              errors );
+                                                                              errors, policy, config );
 
         List<CompilationUnit> compilationUnits = new ArrayList<CompilationUnit>();
 
@@ -215,8 +222,7 @@ public class EclipseJavaCompiler
         CompilerOptions options = new CompilerOptions( settings );
         Compiler compiler = new Compiler( env, policy, options, requestor, problemFactory );
 
-        ICompilationUnit[] units = (ICompilationUnit[])
-            compilationUnits.toArray( new ICompilationUnit[ compilationUnits.size() ] );
+        ICompilationUnit[] units = compilationUnits.toArray( new ICompilationUnit[ compilationUnits.size() ] );
 
         compiler.compile( units );
 
@@ -562,11 +568,19 @@ public class EclipseJavaCompiler
 
         private List<CompilerError> errors;
 
+        private boolean proceedOnErrors;
+
+        CompilerConfiguration config;
+
         public EclipseCompilerICompilerRequestor( String destinationDirectory,
-                                                  List<CompilerError> errors )
+                                                  List<CompilerError> errors,
+                                                  IErrorHandlingPolicy policy,
+                                                  CompilerConfiguration config )
         {
             this.destinationDirectory = destinationDirectory;
             this.errors = errors;
+            this.proceedOnErrors = policy.proceedOnErrors();
+            this.config = config;
         }
 
         public void acceptResult( CompilationResult result )
@@ -579,16 +593,16 @@ public class EclipseJavaCompiler
 
                 for ( IProblem problem : problems )
                 {
-                    String name = new String( problem.getOriginatingFileName() );
-
                     if ( problem.isWarning() )
                     {
-                        errors.add( handleWarning( problem ) );
+                        if (config.isShowWarnings()) {
+                            errors.add( handleWarning( problem ) );
+                        }
                     }
                     else
                     {
                         hasErrors = true;
-                        errors.add( handleError( name,
+                        errors.add( handleError( new String( problem.getOriginatingFileName() ),
                                                  problem.getSourceLineNumber(),
                                                  -1,
                                                  problem.getMessage() ) );
@@ -596,7 +610,7 @@ public class EclipseJavaCompiler
                 }
             }
 
-            if ( !hasErrors )
+            if ( !hasErrors || proceedOnErrors )
             {
                 ClassFile[] classFiles = result.getClassFiles();
 
@@ -617,9 +631,10 @@ public class EclipseJavaCompiler
 
                     File outFile = new File( destinationDirectory, className.replace( '.', '/' ) + ".class" );
 
-                    if ( !outFile.getParentFile().exists() )
+                    if ( !outFile.getParentFile().exists() && !outFile.getParentFile().mkdirs() )
                     {
-                        outFile.getParentFile().mkdirs();
+                        errors.add( handleError( className, -1, -1, "Can't create package" ) );
+                        continue;
                     }
 
                     FileOutputStream fout = null;
