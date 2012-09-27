@@ -41,19 +41,23 @@ package org.codehaus.plexus.compiler;
  *  limitations under the License.
  */
 
+import javax.tools.Diagnostic.Kind;
+
 /**
  * This class encapsulates an error message produced by a programming language
  * processor (whether interpreted or compiled)
  * @author <a href="mailto:stefano@apache.org">Stefano Mazzocchi</a>
+ * @author <a href="mailto:david.lloyd@redhat.com">David M. Lloyd</a>
  * @version $Id$
  * @since 2.0
  */
 public class CompilerError
 {
+
     /**
-     * Is this a severe error or a warning?
+     * Diagnostic kind
      */
-    private boolean error;
+    private Kind kind;
 
     /**
      * The start line number of the offending program text
@@ -104,12 +108,34 @@ public class CompilerError
                           int endcolumn,
                           String message )
     {
-        this.file = file;
-        this.error = error;
+        this(file, error ? Kind.ERROR : Kind.WARNING, startline, startcolumn, endline, endcolumn, message);
+    }
+
+    /**
+     * Construct a new instance.
+     *
+     * @param file The name of the file containing the offending program text
+     * @param kind The type of message to construct
+     * @param startline The start line number of the offending program text
+     * @param startcolumn The start column number of the offending program text
+     * @param endline The end line number of the offending program text
+     * @param endcolumn The end column number of the offending program text
+     * @param message The actual error text produced by the language processor
+     */
+    public CompilerError( String file,
+                          Kind kind,
+                          int startline,
+                          int startcolumn,
+                          int endline,
+                          int endcolumn,
+                          String message )
+    {
+        this.kind = kind;
         this.startline = startline;
         this.startcolumn = startcolumn;
         this.endline = endline;
         this.endcolumn = endcolumn;
+        this.file = file;
         this.message = message;
     }
 
@@ -121,6 +147,7 @@ public class CompilerError
     public CompilerError( String message )
     {
         this.message = message;
+        this.kind = Kind.WARNING;
     }
 
     /**
@@ -132,7 +159,19 @@ public class CompilerError
     public CompilerError( String message, boolean error )
     {
         this.message = message;
-        this.error = error;
+        this.kind = error ? Kind.ERROR : Kind.WARNING;
+    }
+
+    /**
+     * The general message constructor.
+     *
+     * @param message The actual error text produced by the language processor
+     * @param kind The type of message to construct
+     */
+    public CompilerError( String message, Kind kind )
+    {
+        this.kind = kind;
+        this.message = message;
     }
 
     /**
@@ -152,7 +191,7 @@ public class CompilerError
      */
     public boolean isError()
     {
-        return error;
+        return kind == Kind.ERROR;
     }
 
     /**
@@ -213,11 +252,35 @@ public class CompilerError
     {
         if ( file != null )
         {
-            return file + ":" + "[" + startline + "," + startcolumn + "] " + message;
+            if ( startline != 0 )
+            {
+                if ( startcolumn != 0 )
+                {
+                    return file + ":" + "[" + startline + "," + startcolumn + "] " + message;
+                }
+                else
+                {
+                    return file + ":" + "[" + startline + "] " + message;
+                }
+            }
+            else
+            {
+                return file + ": " + message;
+            }
         }
         else
         {
             return message;
         }
+    }
+
+    /**
+     * Get the kind of message.
+     *
+     * @return the kind of message
+     */
+    public Kind getKind()
+    {
+        return kind;
     }
 }

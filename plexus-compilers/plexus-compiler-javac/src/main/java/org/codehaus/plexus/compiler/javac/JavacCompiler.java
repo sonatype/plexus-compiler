@@ -59,12 +59,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringReader;
-import java.io.StringWriter;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -73,7 +68,13 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Properties;
 import java.util.StringTokenizer;
-import java.util.concurrent.CopyOnWriteArrayList;
+
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
 
 /**
  * @author <a href="mailto:trygvis@inamo.no">Trygve Laugst&oslash;l</a>
@@ -93,14 +94,6 @@ public class JavacCompiler
 
     // see compiler.note.note in compiler.properties of javac sources
     private static final String[] NOTE_PREFIXES = { "Note: ", "\u6ce8: ", "\u6ce8\u610f\uff1a " };
-
-    private static final Object LOCK = new Object();
-
-    private static final String JAVAC_CLASSNAME = "com.sun.tools.javac.Main";
-
-    private static volatile Class<?> JAVAC_CLASS;
-
-    private List<Class<?>> javaccClasses = new CopyOnWriteArrayList<Class<?>>();
 
     // ----------------------------------------------------------------------
     //
@@ -129,7 +122,7 @@ public class JavacCompiler
 
         if ( ( sourceFiles == null ) || ( sourceFiles.length == 0 ) )
         {
-            return Collections.<CompilerError>emptyList();
+            return Collections.emptyList();
         }
 
         if ( ( getLogger() != null ) && getLogger().isInfoEnabled() )
@@ -164,7 +157,7 @@ public class JavacCompiler
         }
         else
         {
-            messages = compileInProcess( args, config );
+            messages = compileInProcess( args, config, sourceFiles );
         }
 
         return messages;
@@ -212,7 +205,10 @@ public class JavacCompiler
             args.add( getPathString( sourceLocations ) );
         }
 
-        args.addAll( Arrays.asList( sourceFiles ) );
+        if ( config.isFork() )
+        {
+            args.addAll( Arrays.asList( sourceFiles ) );
+        }
 
         if ( !isPreJava16( config ) )
         {
@@ -334,7 +330,7 @@ public class JavacCompiler
             args.add( value );
         }
 
-        return (String[]) args.toArray( new String[args.size()] );
+        return args.toArray( new String[args.size()] );
     }
 
     /**
@@ -510,73 +506,84 @@ public class JavacCompiler
      * Compile the java sources in the current JVM, without calling an external executable,
      * using <code>com.sun.tools.javac.Main</code> class
      *
+     *
      * @param args arguments for the compiler as they would be used in the command line javac
+     * @param sourceFiles
      * @return List of CompilerError objects with the errors encountered.
      * @throws CompilerException
      */
-    List<CompilerError> compileInProcess( String[] args, CompilerConfiguration config )
+    List<CompilerError> compileInProcess( String[] args, final CompilerConfiguration config, String[] sourceFiles )
         throws CompilerException
     {
-        final Class<?> javacClass = getJavacClass( config );
-        final Thread thread = Thread.currentThread();
-        final ClassLoader contextClassLoader = thread.getContextClassLoader();
-        thread.setContextClassLoader( javacClass.getClassLoader() );
-        try
+        final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if ( compiler == null )
         {
-            return compileInProcess0( javacClass, args );
+            return Collections.singletonList( new CompilerError( "No compiler is provided in this environment.  Perhaps you are running on a JRE rather than a JDK?" ) );
         }
-        finally
+        final String sourceEncoding = config.getSourceEncoding();
+        final Charset sourceCharset = sourceEncoding == null ? null : Charset.forName( sourceEncoding );
+        final DiagnosticCollector<JavaFileObject> collector = new DiagnosticCollector<JavaFileObject>();
+        final StandardJavaFileManager standardFileManager = compiler.getStandardFileManager( collector, null, sourceCharset );
+
+        final Iterable<? extends JavaFileObject> fileObjects = standardFileManager.getJavaFileObjectsFromStrings( Arrays.asList( sourceFiles ) );
+        final JavaCompiler.CompilationTask task = compiler.getTask( null, standardFileManager, collector, Arrays.asList( args ), null, fileObjects );
+        final Boolean result = task.call();
+        final ArrayList<CompilerError> compilerErrors = new ArrayList<CompilerError>();
+        for ( Diagnostic<? extends JavaFileObject> diagnostic : collector.getDiagnostics() )
         {
-            releaseJavaccClass( javacClass, config );
-            thread.setContextClassLoader( contextClassLoader );
+            Diagnostic.Kind kind;
+            switch ( diagnostic.getKind() )
+            {
+                case ERROR:
+                    kind = Diagnostic.Kind.ERROR;
+                    break;
+                case WARNING:
+                    kind = Diagnostic.Kind.WARNING;
+                    break;
+                case MANDATORY_WARNING:
+                    kind = Diagnostic.Kind.MANDATORY_WARNING;
+                    break;
+                case NOTE:
+                    kind = Diagnostic.Kind.NOTE;
+                    break;
+                default:
+                    kind = Diagnostic.Kind.OTHER;
+                    break;
+            }
+            String baseMessage = diagnostic.getMessage( null );
+            if (baseMessage == null) {
+                continue;
+            }
+            JavaFileObject source = diagnostic.getSource();
+            String longFileName = source == null ? null : source.toUri().getPath();
+            String shortFileName = source == null ? null : source.getName();
+            String formattedMessage = baseMessage;
+            int lineNumber = Math.max(0, (int) diagnostic.getLineNumber());
+            int columnNumber = Math.max( 0, (int) diagnostic.getColumnNumber() );
+            if ( source != null && lineNumber > 0 )
+            {
+                // Some compilers like to copy the file name into the message, which makes it appear twice.
+                String possibleTrimming = longFileName + ":" + lineNumber + ": ";
+                if ( formattedMessage.startsWith( possibleTrimming ))
+                {
+                    formattedMessage = formattedMessage.substring( possibleTrimming.length() );
+                }
+                else
+                {
+                    possibleTrimming = shortFileName + ":" + lineNumber + ": ";
+                    if (formattedMessage.startsWith( possibleTrimming ))
+                    {
+                        formattedMessage = formattedMessage.substring( possibleTrimming.length() );
+                    }
+                }
+            }
+            compilerErrors.add( new CompilerError( longFileName, kind, lineNumber, columnNumber, lineNumber, columnNumber, formattedMessage ) );
         }
-    }
-
-    /**
-     * Helper method for compileInProcess()
-     */
-    private static List<CompilerError> compileInProcess0( Class<?> javacClass, String[] args )
-        throws CompilerException
-    {
-        StringWriter out = new StringWriter();
-
-        Integer ok;
-
-        List<CompilerError> messages;
-
-        try
+        if ( result != Boolean.TRUE && compilerErrors.isEmpty() )
         {
-            Method compile = javacClass.getMethod( "compile", new Class[]{ String[].class, PrintWriter.class } );
-
-            ok = (Integer) compile.invoke( null, new Object[]{ args, new PrintWriter( out ) } );
-
-            messages = parseModernStream( ok.intValue(), new BufferedReader( new StringReader( out.toString() ) ) );
+            compilerErrors.add( new CompilerError( "An unknown compilation problem occurred", Diagnostic.Kind.ERROR ) );
         }
-        catch ( NoSuchMethodException e )
-        {
-            throw new CompilerException( "Error while executing the compiler.", e );
-        }
-        catch ( IllegalAccessException e )
-        {
-            throw new CompilerException( "Error while executing the compiler.", e );
-        }
-        catch ( InvocationTargetException e )
-        {
-            throw new CompilerException( "Error while executing the compiler.", e );
-        }
-        catch ( IOException e )
-        {
-            throw new CompilerException( "Error while executing the compiler.", e );
-        }
-
-        if ( ( ok.intValue() != 0 ) && messages.isEmpty() )
-        {
-            // TODO: exception?
-            messages.add( new CompilerError( "Failure executing javac, but could not parse the error:" + EOL +
-                                                 out.toString(), true ) );
-        }
-
-        return messages;
+        return compilerErrors;
     }
 
     /**
@@ -909,118 +916,5 @@ public class JavacCompiler
         return javacExe.getAbsolutePath();
     }
 
-    private void releaseJavaccClass( Class<?> javaccClass, CompilerConfiguration compilerConfiguration )
-    {
-        if ( compilerConfiguration.getCompilerReuseStrategy()
-            == CompilerConfiguration.CompilerReuseStrategy.ReuseCreated )
-        {
-            javaccClasses.add( javaccClass );
-        }
-
-    }
-
-    /**
-     * Find the main class of JavaC. Return the same class for subsequent calls.
-     *
-     * @return the non-null class.
-     * @throws CompilerException if the class has not been found.
-     */
-    private Class<?> getJavacClass( CompilerConfiguration compilerConfiguration )
-        throws CompilerException
-    {
-        Class<?> c = null;
-        switch ( compilerConfiguration.getCompilerReuseStrategy() )
-        {
-            case AlwaysNew:
-                return createJavacClass();
-            case ReuseCreated:
-                synchronized ( javaccClasses )
-                {
-                    if ( javaccClasses.size() > 0 )
-                    {
-                        c = javaccClasses.get( 0 );
-                        javaccClasses.remove( c );
-                        return c;
-                    }
-                }
-                c = createJavacClass();
-                return c;
-            case ReuseSame:
-            default:
-                c = JavacCompiler.JAVAC_CLASS;
-                if ( c != null )
-                {
-                    return c;
-                }
-                synchronized ( JavacCompiler.LOCK )
-                {
-                    if ( c == null )
-                    {
-                        JavacCompiler.JAVAC_CLASS = c = createJavacClass();
-                    }
-                    return c;
-                }
-
-
-        }
-    }
-
-
-    /**
-     * Helper method for create Javac class
-     */
-    private Class<?> createJavacClass()
-        throws CompilerException
-    {
-        try
-        {
-            // look whether JavaC is on Maven's classpath
-            //return Class.forName( JavacCompiler.JAVAC_CLASSNAME, true, JavacCompiler.class.getClassLoader() );
-            return JavacCompiler.class.getClassLoader().loadClass( JavacCompiler.JAVAC_CLASSNAME );
-        }
-        catch ( ClassNotFoundException ex )
-        {
-            // ok
-        }
-
-        final File toolsJar = new File( System.getProperty( "java.home" ), "../lib/tools.jar" );
-        if ( !toolsJar.exists() )
-        {
-            throw new CompilerException( "tools.jar not found: " + toolsJar );
-        }
-
-        try
-        {
-            final ClassLoader javacClassLoader =
-                new URLClassLoader( new URL[]{ toolsJar.toURI().toURL() }, JavacCompiler.class.getClassLoader() );
-
-            final Thread thread = Thread.currentThread();
-            final ClassLoader contextClassLoader = thread.getContextClassLoader();
-            thread.setContextClassLoader( javacClassLoader );
-            try
-            {
-                //return Class.forName( JavacCompiler.JAVAC_CLASSNAME, true, javacClassLoader );
-                return javacClassLoader.loadClass( JavacCompiler.JAVAC_CLASSNAME );
-            }
-            finally
-            {
-                thread.setContextClassLoader( contextClassLoader );
-            }
-        }
-        catch ( MalformedURLException ex )
-        {
-            throw new CompilerException(
-                "Could not convert the file reference to tools.jar to a URL, path to tools.jar: '"
-                    + toolsJar.getAbsolutePath() + "'.", ex );
-        }
-        catch ( ClassNotFoundException ex )
-        {
-            throw new CompilerException( "Unable to locate the Javac Compiler in:" + EOL + "  " + toolsJar + EOL
-                                             + "Please ensure you are using JDK 1.4 or above and" + EOL
-                                             + "not a JRE (the com.sun.tools.javac.Main class is required)." + EOL
-                                             + "In most cases you can change the location of your Java" + EOL
-                                             + "installation by setting the JAVA_HOME environment variable.", ex );
-        }
-    }
 
 }
