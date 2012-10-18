@@ -39,6 +39,8 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.Map;
+import java.util.HashMap;
 
 /**
  * @version $Id$
@@ -50,7 +52,9 @@ public abstract class AbstractCompilerTest
 
     private boolean compilerDeprecationWarnings = false;
 
-    protected abstract String getRoleHint();
+	private Map<String, String> customCompilerArgs = new HashMap<String, String>();
+
+	protected abstract String getRoleHint();
 
     protected void setCompilerDebug( boolean flag )
     {
@@ -62,6 +66,10 @@ public abstract class AbstractCompilerTest
         compilerDeprecationWarnings = flag;
     }
 
+	protected Map<String, String> getCustomCompilerArgs()
+    {
+		return customCompilerArgs;
+	}
 
     protected List<String> getClasspath()
         throws Exception
@@ -169,6 +177,8 @@ public abstract class AbstractCompilerTest
             compilerConfig.setDebug( compilerDebug );
 
             compilerConfig.setShowDeprecation( compilerDeprecationWarnings );
+
+            compilerConfig.setCustomCompilerArgumentsAsMap(customCompilerArgs);
 
             compilerConfig.setClasspathEntries( getClasspath() );
 
