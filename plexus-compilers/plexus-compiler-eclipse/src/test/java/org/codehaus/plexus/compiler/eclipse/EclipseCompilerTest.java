@@ -110,11 +110,14 @@ public class EclipseCompilerTest
 
         compilerConfig.addCompilerCustomArgument( "-properties", "file_does_not_exist" );
 
-        try {
-          compiler.performCompile( compilerConfig );
-          fail( "looking up the properties file should have thrown an exception" );
-        } catch (IllegalArgumentException e) {
-          assertEquals( "Properties file not exist", e.getMessage() );
+        try
+        {
+            compiler.performCompile( compilerConfig );
+            fail( "looking up the properties file should have thrown an exception" );
+        }
+        catch ( IllegalArgumentException e )
+        {
+            assertEquals( "Properties file not exist", e.getMessage() );
         }
     }
 
