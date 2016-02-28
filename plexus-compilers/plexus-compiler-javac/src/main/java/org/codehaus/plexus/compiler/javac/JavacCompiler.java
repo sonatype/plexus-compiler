@@ -41,19 +41,6 @@ package org.codehaus.plexus.compiler.javac;
  *  limitations under the License.
  */
 
-import org.codehaus.plexus.compiler.AbstractCompiler;
-import org.codehaus.plexus.compiler.CompilerConfiguration;
-import org.codehaus.plexus.compiler.CompilerException;
-import org.codehaus.plexus.compiler.CompilerMessage;
-import org.codehaus.plexus.compiler.CompilerOutputStyle;
-import org.codehaus.plexus.compiler.CompilerResult;
-import org.codehaus.plexus.util.FileUtils;
-import org.codehaus.plexus.util.Os;
-import org.codehaus.plexus.util.StringUtils;
-import org.codehaus.plexus.util.cli.CommandLineException;
-import org.codehaus.plexus.util.cli.CommandLineUtils;
-import org.codehaus.plexus.util.cli.Commandline;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileWriter;
@@ -68,12 +55,28 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Properties;
 import java.util.StringTokenizer;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.jar.JarFile;
+
+import org.codehaus.plexus.compiler.AbstractCompiler;
+import org.codehaus.plexus.compiler.CompilerConfiguration;
+import org.codehaus.plexus.compiler.CompilerException;
+import org.codehaus.plexus.compiler.CompilerMessage;
+import org.codehaus.plexus.compiler.CompilerOutputStyle;
+import org.codehaus.plexus.compiler.CompilerResult;
+import org.codehaus.plexus.util.FileUtils;
+import org.codehaus.plexus.util.Os;
+import org.codehaus.plexus.util.StringUtils;
+import org.codehaus.plexus.util.cli.CommandLineException;
+import org.codehaus.plexus.util.cli.CommandLineUtils;
+import org.codehaus.plexus.util.cli.Commandline;
 
 /**
  * @author <a href="mailto:trygvis@inamo.no">Trygve Laugst&oslash;l</a>
@@ -114,6 +117,7 @@ public class JavacCompiler
     // Compiler Implementation
     // ----------------------------------------------------------------------
 
+    @Override
     public CompilerResult performCompile( CompilerConfiguration config )
         throws CompilerException
     {
@@ -222,6 +226,14 @@ public class JavacCompiler
 
             args.add( getPathString( classpathEntries ) );
         }
+        
+        List<String> modulepathEntries = config.getModulepathEntries();
+        if ( modulepathEntries != null && !modulepathEntries.isEmpty() )
+        {
+            args.add( "-modulepath" );
+
+            args.add( getPathString( modulepathEntries ) );
+        }
 
         List<String> sourceLocations = config.getSourceLocations();
         if ( sourceLocations != null && !sourceLocations.isEmpty() )
@@ -267,6 +279,11 @@ public class JavacCompiler
                     buffer.append( procs[i] );
                 }
                 args.add( buffer.toString() );
+            }
+            if ( config.getProcessorPathEntries() != null && !config.getProcessorPathEntries().isEmpty() ) {
+                args.add( "-processorpath" );
+
+                args.add( getPathString( config.getProcessorPathEntries() ) );
             }
         }
 
