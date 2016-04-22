@@ -66,7 +66,8 @@ public class EclipseCompilerTest
     protected Collection<String> expectedOutputFiles()
     {
         return Arrays.asList( new String[] { "org/codehaus/foo/Deprecation.class", "org/codehaus/foo/ExternalDeps.class",
-            "org/codehaus/foo/Person.class", "org/codehaus/foo/ReservedWord.class" } );
+                                             "org/codehaus/foo/Person.class", "org/codehaus/foo/ReservedWord.class",
+                                             "org/codehaus/foo/Import.class", "org/codehaus/BAR/Baz.class" } );
     }
 
     // The test is fairly meaningless as we can not validate anything
@@ -99,6 +100,26 @@ public class EclipseCompilerTest
 
         assertTrue( "This key should not have been cleaned does not start with dash", cleaned.containsKey( "cleanKey" ) );
 
+    }
+
+    public void testInitializeWarningsForPropertiesArgument()
+        throws Exception
+    {
+        org.codehaus.plexus.compiler.Compiler compiler = (Compiler) lookup( Compiler.ROLE, getRoleHint() );
+
+        CompilerConfiguration compilerConfig = createMinimalCompilerConfig();
+
+        compilerConfig.addCompilerCustomArgument( "-properties", "file_does_not_exist" );
+
+        try
+        {
+            compiler.performCompile( compilerConfig );
+            fail( "looking up the properties file should have thrown an exception" );
+        }
+        catch ( IllegalArgumentException e )
+        {
+            assertEquals( "Properties file not exist", e.getMessage() );
+        }
     }
 
     private CompilerConfiguration createMinimalCompilerConfig()
